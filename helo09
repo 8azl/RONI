@@ -1,0 +1,1098 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local function getRemotesFolder()
+    return ReplicatedStorage:FindFirstChild("Remotes")
+end
+
+local function getShopController()
+    local ok, res = pcall(function()
+        local controllers = ReplicatedStorage:WaitForChild("Controllers", 5)
+        local ui = controllers and controllers:WaitForChild("UI", 5)
+        local sc = ui and ui:WaitForChild("ShopController", 5)
+        if sc then
+            return require(sc)
+        end
+        return nil
+    end)
+    return ok and res or nil
+end
+
+local function getSwordsModule()
+    local ok, res = pcall(function()
+        local misc = ReplicatedStorage:WaitForChild("Misc", 5)
+        local sm = misc and misc:WaitForChild("Swords", 5)
+        if sm then
+            return require(sm)
+        end
+        return nil
+    end)
+    return ok and res or nil
+end
+
+local Cosmetics = {}
+Cosmetics.Catalog = {
+    Swords = {},
+    Explosions = {},
+    Titles = {},
+    Emotes = {}
+}
+
+local function normalizeName(val)
+    return tostring(val or ""):lower():gsub("[^%w]", "")
+end
+
+local function attachAccessoryManually(char, acc)
+    local handle = acc:FindFirstChild("Handle")
+    if not handle or not handle:IsA("BasePart") then return end
+
+    local accAttachment = handle:FindFirstChildOfClass("Attachment")
+    local charAttachment
+
+    if accAttachment then
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                charAttachment = part:FindFirstChild(accAttachment.Name)
+                if charAttachment then break end
+            end
+        end
+    end
+
+    local r6AttachmentOffsets = {
+        ["HatAttachment"] = {Part = "Head", CFrame = CFrame.new(0, 0.6, 0)},
+        ["HairAttachment"] = {Part = "Head", CFrame = CFrame.new(0, 0.6, 0)},
+        ["FaceFrontAttachment"] = {Part = "Head", CFrame = CFrame.new(0, 0, -0.6)},
+        ["FaceCenterAttachment"] = {Part = "Head", CFrame = CFrame.new(0, 0, -0.6)},
+        ["NeckAttachment"] = {Part = "Torso", CFrame = CFrame.new(0, 1, 0)},
+        ["BackAttachment"] = {Part = "Torso", CFrame = CFrame.new(0, 0, 0.6)},
+        ["BodyBackAttachment"] = {Part = "Torso", CFrame = CFrame.new(0, 0, 0.6)},
+        ["WaistAttachment"] = {Part = "Torso", CFrame = CFrame.new(0, -1, 0)},
+        ["BodyWaistAttachment"] = {Part = "Torso", CFrame = CFrame.new(0, -1, 0)},
+        ["LeftCollarAttachment"] = {Part = "Torso", CFrame = CFrame.new(-0.6, 1, 0)},
+        ["RightCollarAttachment"] = {Part = "Torso", CFrame = CFrame.new(0.6, 1, 0)},
+        ["LeftShoulderAttachment"] = {Part = "Torso", CFrame = CFrame.new(-1, 1, 0)},
+        ["RightShoulderAttachment"] = {Part = "Torso", CFrame = CFrame.new(1, 1, 0)},
+    }
+
+    if charAttachment then
+        acc.Parent = char
+        handle.CanCollide = false
+        handle.Anchored = false
+
+        local part = charAttachment.Parent
+        if charAttachment:IsA("Attachment") and accAttachment then
+            handle.CFrame = part.CFrame * charAttachment.CFrame * accAttachment.CFrame:Inverse()
+        else
+            handle.CFrame = part.CFrame * CFrame.new(0, 0.6, 0)
+        end
+
+        local weld = Instance.new("Weld")
+        weld.Name = "AccessoryWeld"
+        weld.Part0 = handle
+        weld.Part1 = part
+        weld.C0 = accAttachment and accAttachment.CFrame or CFrame.new(0, 0.6, 0)
+        weld.C1 = charAttachment:IsA("Attachment") and charAttachment.CFrame or CFrame.new()
+        weld.Parent = handle
+    else
+        local partName = "Head"
+        local offset = CFrame.new(0, 0.6, 0)
+
+        if accAttachment then
+            local targetOffset = r6AttachmentOffsets[accAttachment.Name]
+            if targetOffset then
+                partName = targetOffset.Part
+                offset = targetOffset.CFrame
+            end
+        end
+
+        local part = char:FindFirstChild(partName)
+        if part then
+            acc.Parent = char
+            handle.CanCollide = false
+            handle.Anchored = false
+
+            if accAttachment then
+                handle.CFrame = part.CFrame * offset * accAttachment.CFrame:Inverse()
+            else
+                handle.CFrame = part.CFrame * offset
+            end
+
+            local weld = Instance.new("Weld")
+            weld.Name = "AccessoryWeld"
+            weld.Part0 = handle
+            weld.Part1 = part
+            weld.C0 = accAttachment and accAttachment.CFrame or offset
+            weld.C1 = offset
+            weld.Parent = handle
+        else
+            acc.Parent = char
+        end
+    end
+end
+
+Cosmetics.AvatarChanger = {
+    Enabled = false,
+    Target = "",
+    OriginalAppearance = nil
+}
+
+function Cosmetics.AvatarChanger.SaveAppearance()
+    if Cosmetics.AvatarChanger.OriginalAppearance then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local appearance = {
+        Face = nil,
+        Shirt = nil,
+        Pants = nil,
+        BodyColors = nil,
+        HeadMesh = nil,
+        Accessories = {},
+        CharacterMeshes = {}
+    }
+
+    local head = char:FindFirstChild("Head")
+    if head then
+        local face = head:FindFirstChildOfClass("Decal")
+        if face then
+            appearance.Face = face.Texture
+        end
+        local headMesh = head:FindFirstChildOfClass("SpecialMesh")
+        if headMesh then
+            appearance.HeadMesh = headMesh:Clone()
+        end
+    end
+
+    local shirt = char:FindFirstChildOfClass("Shirt")
+    if shirt then
+        appearance.Shirt = shirt.ShirtTemplate
+    end
+
+    local pants = char:FindFirstChildOfClass("Pants")
+    if pants then
+        appearance.Pants = pants.PantsTemplate
+    end
+
+    local bc = char:FindFirstChildOfClass("BodyColors")
+    if bc then
+        appearance.BodyColors = {
+            HeadColor3 = bc.HeadColor3,
+            LeftArmColor3 = bc.LeftArmColor3,
+            RightArmColor3 = bc.RightArmColor3,
+            LeftLegColor3 = bc.LeftLegColor3,
+            RightLegColor3 = bc.RightLegColor3,
+            TorsoColor3 = bc.TorsoColor3
+        }
+    end
+
+    for _, obj in ipairs(char:GetChildren()) do
+        if obj:IsA("Accessory") or obj:IsA("Accoutrement") then
+            table.insert(appearance.Accessories, obj:Clone())
+        elseif obj:IsA("CharacterMesh") then
+            table.insert(appearance.CharacterMeshes, obj:Clone())
+        end
+    end
+
+    Cosmetics.AvatarChanger.OriginalAppearance = appearance
+end
+
+function Cosmetics.AvatarChanger.RestoreAppearance()
+    local char = LocalPlayer.Character
+    local orig = Cosmetics.AvatarChanger.OriginalAppearance
+    if not char or not orig then return end
+
+    pcall(function()
+        for _, obj in ipairs(char:GetChildren()) do
+            if obj:IsA("Accessory") or obj:IsA("Accoutrement") or obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("BodyColors") or obj:IsA("CharacterMesh") or obj:IsA("ShirtGraphic") then
+                obj:Destroy()
+            end
+        end
+
+        local head = char:FindFirstChild("Head")
+        if head then
+            local face = head:FindFirstChildOfClass("Decal")
+            if face then face:Destroy() end
+            if orig.Face then
+                local newFace = Instance.new("Decal")
+                newFace.Name = "face"
+                newFace.Texture = orig.Face
+                newFace.Parent = head
+            end
+
+            local headMesh = head:FindFirstChildOfClass("SpecialMesh")
+            if headMesh then headMesh:Destroy() end
+            if orig.HeadMesh then
+                orig.HeadMesh:Clone().Parent = head
+            end
+        end
+
+        if orig.Shirt then
+            local shirt = Instance.new("Shirt")
+            shirt.Name = "Shirt"
+            shirt.ShirtTemplate = orig.Shirt
+            shirt.Parent = char
+        end
+
+        if orig.Pants then
+            local pants = Instance.new("Pants")
+            pants.Name = "Pants"
+            pants.PantsTemplate = orig.Pants
+            pants.Parent = char
+        end
+
+        if orig.BodyColors then
+            local bc = Instance.new("BodyColors")
+            bc.HeadColor3 = orig.BodyColors.HeadColor3
+            bc.LeftArmColor3 = orig.BodyColors.LeftArmColor3
+            bc.RightArmColor3 = orig.BodyColors.RightArmColor3
+            bc.LeftLegColor3 = orig.BodyColors.LeftLegColor3
+            bc.RightLegColor3 = orig.BodyColors.RightLegColor3
+            bc.TorsoColor3 = orig.BodyColors.TorsoColor3
+            bc.Parent = char
+        end
+
+        for _, mesh in ipairs(orig.CharacterMeshes) do
+            mesh:Clone().Parent = char
+        end
+
+        for _, acc in ipairs(orig.Accessories) do
+            pcall(function()
+                attachAccessoryManually(char, acc:Clone())
+            end)
+        end
+    end)
+end
+
+function Cosmetics.AvatarChanger.Apply(userId)
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local success, model = pcall(function()
+        return Players:CreateHumanoidModelFromUserId(userId)
+    end)
+    if not success or not model then return end
+
+    pcall(function()
+        for _, obj in ipairs(char:GetChildren()) do
+            if obj:IsA("Accessory") or obj:IsA("Accoutrement") or obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("BodyColors") or obj:IsA("CharacterMesh") or obj:IsA("ShirtGraphic") then
+                obj:Destroy()
+            end
+        end
+
+        local head = char:FindFirstChild("Head")
+        local modelHead = model:FindFirstChild("Head")
+        if head and modelHead then
+            local face = head:FindFirstChildOfClass("Decal")
+            if face then face:Destroy() end
+
+            local modelFace = modelHead:FindFirstChildOfClass("Decal")
+            if modelFace then
+                modelFace:Clone().Parent = head
+            end
+
+            local headMesh = head:FindFirstChildOfClass("SpecialMesh")
+            local modelMesh = modelHead:FindFirstChildOfClass("SpecialMesh")
+            if modelMesh then
+                if headMesh then headMesh:Destroy() end
+                modelMesh:Clone().Parent = head
+            elseif headMesh then
+                headMesh:Destroy()
+            end
+
+            head.Size = modelHead.Size
+            head.Color = modelHead.Color
+        end
+
+        for _, obj in ipairs(model:GetChildren()) do
+            if obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("BodyColors") or obj:IsA("ShirtGraphic") or obj:IsA("CharacterMesh") then
+                obj:Clone().Parent = char
+            elseif obj:IsA("Accessory") or obj:IsA("Accoutrement") then
+                pcall(function()
+                    attachAccessoryManually(char, obj:Clone())
+                end)
+            end
+        end
+
+        model:Destroy()
+    end)
+end
+
+function Cosmetics.AvatarChanger.SetTarget(target)
+    Cosmetics.AvatarChanger.Target = tostring(target or "")
+    if Cosmetics.AvatarChanger.Enabled and Cosmetics.AvatarChanger.Target ~= "" then
+        local targetId = tonumber(Cosmetics.AvatarChanger.Target)
+        if not targetId then
+            pcall(function()
+                targetId = Players:GetUserIdFromNameAsync(Cosmetics.AvatarChanger.Target)
+            end)
+        end
+        if targetId then
+            Cosmetics.AvatarChanger.Apply(targetId)
+        end
+    end
+end
+
+function Cosmetics.AvatarChanger.Toggle(state)
+    Cosmetics.AvatarChanger.Enabled = state == true
+    if Cosmetics.AvatarChanger.Enabled then
+        Cosmetics.AvatarChanger.SaveAppearance()
+        if Cosmetics.AvatarChanger.Target ~= "" then
+            Cosmetics.AvatarChanger.SetTarget(Cosmetics.AvatarChanger.Target)
+        end
+    else
+        Cosmetics.AvatarChanger.RestoreAppearance()
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    pcall(function()
+        LocalPlayer.CharacterAppearanceLoaded:Wait()
+    end)
+    task.wait(0.5)
+    if Cosmetics.AvatarChanger.Enabled and Cosmetics.AvatarChanger.Target ~= "" then
+        local targetId = tonumber(Cosmetics.AvatarChanger.Target)
+        if not targetId then
+            pcall(function()
+                targetId = Players:GetUserIdFromNameAsync(Cosmetics.AvatarChanger.Target)
+            end)
+        end
+        if targetId then
+            Cosmetics.AvatarChanger.Apply(targetId)
+        end
+    end
+end)
+
+Cosmetics.UnlockAll = {
+    Enabled = false,
+    Connections = {},
+    HookedPages = {},
+    OriginalSetItems = {},
+    EquipButtonConnection = nil,
+    LocalEquipButton = nil
+}
+
+local function stateSet(state, value)
+    if state and type(state.Set) == "function" then
+        pcall(function()
+            state:Set(value)
+        end)
+    end
+end
+
+local function forceOwned(item)
+    if type(item) ~= "table" then return false end
+    item.Hidden = false
+    item.ForceHide = false
+    item.AlwaysVisible = true
+    item.Section = "Owned"
+
+    stateSet(item.OwnsItem, true)
+
+    if item.ItemsMatching and type(item.ItemsMatching.Set) == "function" then
+        local current = {}
+        pcall(function()
+            current = item.ItemsMatching:Get() or {}
+        end)
+        if #current == 0 then
+            stateSet(item.ItemsMatching, {
+                "__visual_unlock_" .. tostring(item.Name)
+            })
+        end
+    end
+    return true
+end
+
+local function findExistingVirtualItem(inventoryType, name)
+    local sc = getShopController()
+    if not sc or not sc._virtualItems or not sc._virtualItems[inventoryType] then
+        return nil
+    end
+    local list = sc._virtualItems[inventoryType]
+    if list[name] then return list[name] end
+    for _, itm in pairs(list) do
+        if type(itm) == "table" and itm.Name == name then
+            return itm
+        end
+    end
+    return nil
+end
+
+local function ensurePageLoaded(pageName)
+    local sc = getShopController()
+    if not sc then return end
+    if type(sc._loadInventoryPage) == "function" then
+        pcall(function()
+            sc:_loadInventoryPage(pageName)
+        end)
+    end
+    local deadline = os.clock() + 3
+    while os.clock() < deadline do
+        local page = sc._inventoryPages and sc._inventoryPages[pageName]
+        local items = sc._virtualItems and sc._virtualItems[pageName]
+        if page and items then break end
+        task.wait(0.05)
+    end
+end
+
+local function hookInventoryPageScroll(pageType)
+    local sc = getShopController()
+    if not sc or not sc._inventoryPages then return end
+    local page = sc._inventoryPages[pageType]
+    if not page or not page.Scroll or Cosmetics.UnlockAll.HookedPages[pageType] then return end
+
+    local origSetItems = page.Scroll.SetItems
+    Cosmetics.UnlockAll.OriginalSetItems[pageType] = origSetItems
+    Cosmetics.UnlockAll.HookedPages[pageType] = true
+
+    page.Scroll.SetItems = function(section, items)
+        if Cosmetics.UnlockAll.Enabled then
+            if section == "Unowned" then
+                return origSetItems("Unowned", {})
+            elseif section == "Owned" then
+                local allOwned = {}
+                local seen = {}
+                local vItems = sc._virtualItems and sc._virtualItems[pageType]
+                if vItems then
+                    for _, itm in pairs(vItems) do
+                        if type(itm) == "table" and itm.Name and not itm.ForceHide and not seen[itm.Name] then
+                            seen[itm.Name] = true
+                            forceOwned(itm)
+                            table.insert(allOwned, itm)
+                        end
+                    end
+                end
+                return origSetItems("Owned", allOwned)
+            end
+        end
+        return origSetItems(section, items)
+    end
+end
+
+local function refreshInventoryPage(pageType)
+    local sc = getShopController()
+    if not sc or not sc._inventoryPages then return end
+    local page = sc._inventoryPages[pageType]
+    if not page then return end
+
+    hookInventoryPageScroll(pageType)
+
+    pcall(function()
+        page.BeginBatch()
+    end)
+
+    local items = sc._virtualItems and sc._virtualItems[pageType]
+    if items and page.MarkDirty then
+        for _, itm in pairs(items) do
+            if type(itm) == "table" then
+                forceOwned(itm)
+                pcall(function()
+                    page.MarkDirty(itm, true, true)
+                end)
+            end
+        end
+        pcall(function()
+            page.MarkDirty(nil, true, true)
+        end)
+    end
+
+    pcall(function()
+        page.EndBatch()
+    end)
+end
+
+local function unlockSwords()
+    local sc = getShopController()
+    local sm = getSwordsModule()
+    if not sc or not sm then return end
+
+    ensurePageLoaded("Sword")
+
+    sc._virtualItems = sc._virtualItems or {}
+    sc._virtualItems.Sword = sc._virtualItems.Sword or {}
+
+    local collection = sm:GetCollection()
+    local processed = 0
+    for key, sword in pairs(collection) do
+        processed += 1
+        if processed % 30 == 0 then
+            task.wait()
+        end
+        if type(sword) == "table" then
+            local swordName = sword.Name or (type(key) == "string" and key) or nil
+            if swordName then
+                local item = findExistingVirtualItem("Sword", swordName)
+                if not item and type(sc._createSwordSlot) == "function" then
+                    pcall(function()
+                        sc:_createSwordSlot(sword)
+                    end)
+                    item = findExistingVirtualItem("Sword", swordName)
+                end
+                if item then
+                    forceOwned(item)
+                end
+            end
+        end
+    end
+
+    refreshInventoryPage("Sword")
+end
+
+local function unlockExplosions()
+    local sc = getShopController()
+    if not sc then return end
+
+    ensurePageLoaded("Explosion")
+
+    local misc = ReplicatedStorage:FindFirstChild("Misc")
+    local dataExplosions = misc and misc:FindFirstChild("DataExplosions")
+    if not dataExplosions then return end
+
+    sc._virtualItems = sc._virtualItems or {}
+    sc._virtualItems.Explosion = sc._virtualItems.Explosion or {}
+
+    for _, config in ipairs(dataExplosions:GetChildren()) do
+        local item = findExistingVirtualItem("Explosion", config.Name)
+        if not item and type(sc._createExplosionSlot) == "function" then
+            pcall(function()
+                sc:_createExplosionSlot(config)
+            end)
+            item = findExistingVirtualItem("Explosion", config.Name)
+        end
+        if item then
+            forceOwned(item)
+        end
+    end
+
+    refreshInventoryPage("Explosion")
+end
+
+local function unlockTitles()
+    for _, object in ipairs(PlayerGui:GetDescendants()) do
+        if object:IsA("GuiObject") then
+            local parent = object.Parent
+            local grand = parent and parent.Parent
+            local inTitleList = (parent and parent.Name == "TitleList") or (grand and grand.Name == "TitleList")
+            if inTitleList and object:FindFirstChild("TextLabel") then
+                object.Visible = true
+            end
+        end
+    end
+end
+
+local function unlockEmotes()
+    local misc = ReplicatedStorage:FindFirstChild("Misc")
+    local emotes = misc and misc:FindFirstChild("Emotes")
+    if emotes then
+        for _, emote in ipairs(emotes:GetChildren()) do
+            pcall(function()
+                emote:SetAttribute("Unlocked", true)
+            end)
+        end
+    end
+end
+
+local function getShopInfoParts()
+    local shop = PlayerGui:FindFirstChild("Shop")
+    local holder = shop and shop:FindFirstChild("Holder")
+    local infoBG = holder and holder:FindFirstChild("InfoBG")
+    if not infoBG then
+        return shop, nil, nil, nil
+    end
+    local namer = infoBG:FindFirstChild("Namer")
+    local buyButton = infoBG:FindFirstChild("BuyButton")
+    return shop, infoBG, namer, buyButton
+end
+
+local function setButtonText(button, value)
+    if not button then return end
+    if button:IsA("GuiObject") then
+        button.Visible = true
+        button.Active = true
+    end
+    if button:IsA("TextButton") then
+        button.Text = value
+    end
+    for _, object in ipairs(button:GetDescendants()) do
+        if object:IsA("TextLabel") or object:IsA("TextButton") then
+            local current = object.Text
+            if current == "Buy" or current == "Equip" or current == "Equipped" or tostring(object.Name):lower():find("price", 1, true) or tostring(object.Name):lower():find("equip", 1, true) then
+                object.Text = value
+                object.Visible = true
+            end
+        end
+    end
+end
+
+local function destroyLocalEquipButton()
+    if Cosmetics.UnlockAll.EquipButtonConnection then
+        Cosmetics.UnlockAll.EquipButtonConnection:Disconnect()
+        Cosmetics.UnlockAll.EquipButtonConnection = nil
+    end
+    if Cosmetics.UnlockAll.LocalEquipButton and Cosmetics.UnlockAll.LocalEquipButton.Parent then
+        pcall(function()
+            Cosmetics.UnlockAll.LocalEquipButton:Destroy()
+        end)
+    end
+    Cosmetics.UnlockAll.LocalEquipButton = nil
+end
+
+local function ensureLocalSwordEquipButton()
+    if not Cosmetics.UnlockAll.Enabled then
+        destroyLocalEquipButton()
+        return
+    end
+
+    local shop, infoBG, namer, nativeButton = getShopInfoParts()
+    if not shop or not infoBG or not namer or not namer:IsA("TextLabel") then
+        return
+    end
+
+    local swordName = namer.Text
+    local sm = getSwordsModule()
+    if swordName == "" or not sm or not sm:GetSword(swordName) then
+        destroyLocalEquipButton()
+        return
+    end
+
+    local isEquipped = (Cosmetics.SwordChanger.EquippedSword == swordName)
+
+    if nativeButton then
+        setButtonText(nativeButton, isEquipped and "Equipped" or "Equip")
+    end
+
+    if Cosmetics.UnlockAll.LocalEquipButton and Cosmetics.UnlockAll.LocalEquipButton.Parent == infoBG then
+        Cosmetics.UnlockAll.LocalEquipButton.Visible = true
+        setButtonText(Cosmetics.UnlockAll.LocalEquipButton, isEquipped and "Equipped" or "Equip")
+        return
+    end
+
+    destroyLocalEquipButton()
+
+    local button
+    if nativeButton and nativeButton:IsA("GuiButton") then
+        button = nativeButton:Clone()
+        button.Name = "CosmeticUnlockEquipButton"
+        for _, object in ipairs(button:GetDescendants()) do
+            if object:IsA("LocalScript") or object:IsA("Script") then
+                object:Destroy()
+            end
+        end
+        button.Parent = infoBG
+        button.ZIndex = math.max(button.ZIndex + 10, 30)
+    else
+        button = Instance.new("TextButton")
+        button.Name = "CosmeticUnlockEquipButton"
+        button.Size = UDim2.new(0.82, 0, 0, 52)
+        button.Position = UDim2.new(0.09, 0, 1, -68)
+        button.BackgroundColor3 = Color3.fromRGB(70, 190, 60)
+        button.BorderSizePixel = 0
+        button.Text = "Equip"
+        button.Font = Enum.Font.GothamBold
+        button.TextSize = 22
+        button.TextColor3 = Color3.new(1, 1, 1)
+        button.ZIndex = 30
+        button.Parent = infoBG
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 8)
+        corner.Parent = button
+    end
+
+    button.Visible = true
+    button.Active = true
+    Cosmetics.UnlockAll.LocalEquipButton = button
+
+    setButtonText(button, isEquipped and "Equipped" or "Equip")
+
+    Cosmetics.UnlockAll.EquipButtonConnection = button.Activated:Connect(function()
+        local currentSword = namer.Text
+        if Cosmetics.SwordChanger.Equip(currentSword) then
+            setButtonText(button, "Equipped")
+            if nativeButton then
+                setButtonText(nativeButton, "Equipped")
+            end
+        end
+    end)
+end
+
+local function hookShopEvents()
+    local shop = PlayerGui:FindFirstChild("Shop")
+    if not shop then return end
+
+    table.insert(Cosmetics.UnlockAll.Connections, shop:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if Cosmetics.UnlockAll.Enabled and shop.Enabled then
+            task.defer(function()
+                refreshInventoryPage("Sword")
+                refreshInventoryPage("Explosion")
+                ensureLocalSwordEquipButton()
+            end)
+        end
+    end))
+
+    local holder = shop:FindFirstChild("Holder")
+    local infoBG = holder and holder:FindFirstChild("InfoBG")
+    local namer = infoBG and infoBG:FindFirstChild("Namer")
+
+    if namer then
+        table.insert(Cosmetics.UnlockAll.Connections, namer:GetPropertyChangedSignal("Text"):Connect(function()
+            if Cosmetics.UnlockAll.Enabled then
+                task.defer(ensureLocalSwordEquipButton)
+            end
+        end))
+    end
+
+    if infoBG then
+        table.insert(Cosmetics.UnlockAll.Connections, infoBG:GetPropertyChangedSignal("Visible"):Connect(function()
+            if Cosmetics.UnlockAll.Enabled and infoBG.Visible then
+                task.defer(ensureLocalSwordEquipButton)
+            end
+        end))
+    end
+end
+
+function Cosmetics.UnlockAll.Enable()
+    if Cosmetics.UnlockAll.Enabled then return end
+    Cosmetics.UnlockAll.Enabled = true
+
+    unlockSwords()
+    unlockExplosions()
+    unlockTitles()
+    unlockEmotes()
+    hookShopEvents()
+    task.defer(ensureLocalSwordEquipButton)
+end
+
+function Cosmetics.UnlockAll.Disable()
+    Cosmetics.UnlockAll.Enabled = false
+
+    for _, conn in ipairs(Cosmetics.UnlockAll.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    table.clear(Cosmetics.UnlockAll.Connections)
+
+    destroyLocalEquipButton()
+
+    local sc = getShopController()
+    if sc and sc._inventoryPages then
+        for pageType, page in pairs(sc._inventoryPages) do
+            if page and page.MarkDirty then
+                pcall(function()
+                    page.MarkDirty(nil, true, true)
+                end)
+            end
+        end
+    end
+end
+
+function Cosmetics.UnlockAll.Toggle(state)
+    if state then
+        Cosmetics.UnlockAll.Enable()
+    else
+        Cosmetics.UnlockAll.Disable()
+    end
+end
+
+function Cosmetics.UnlockAll.Refresh()
+    if not Cosmetics.UnlockAll.Enabled then return end
+    unlockSwords()
+    unlockExplosions()
+    unlockTitles()
+    unlockEmotes()
+end
+
+Cosmetics.SwordChanger = {
+    EquippedSword = nil,
+    SwordController = nil,
+    Connections = {}
+}
+
+local function getSwordSlashName(swordName)
+    local sm = getSwordsModule()
+    if sm then
+        local ok, data = pcall(function() return sm:GetSword(swordName) end)
+        if ok and type(data) == "table" and type(data.SlashName) == "string" and data.SlashName ~= "" then
+            return data.SlashName
+        end
+    end
+    return "SlashEffect"
+end
+
+local function visualRemoveOldSwordCompletely(oldSword)
+    if type(oldSword) ~= "string" or oldSword == "" then return end
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local swordKey = normalizeName(oldSword)
+    for _, object in ipairs(char:GetChildren()) do
+        if object.Name == oldSword or normalizeName(object.Name) == swordKey then
+            if object:IsA("Model") or object:IsA("Folder") or object:IsA("BasePart") or object:IsA("Accessory") or object:IsA("Tool") then
+                pcall(function() object:Destroy() end)
+            end
+        end
+    end
+
+    local controller = Cosmetics.SwordChanger.SwordController
+    if controller then
+        pcall(function()
+            if controller.currentSword ~= nil then controller.currentSword = nil end
+            if controller.SwordFX ~= nil then controller.SwordFX = nil end
+        end)
+    end
+end
+
+local swordFxHooked = {}
+local function hookSwordFxRemote(remoteName)
+    if not getconnections then return end
+    local remotes = getRemotesFolder()
+    local remote = remotes and remotes:FindFirstChild(remoteName)
+    if not remote or not remote:IsA("RemoteEvent") then return end
+
+    local ok, connections = pcall(getconnections, remote.OnClientEvent)
+    if not ok or type(connections) ~= "table" then return end
+
+    for _, connection in ipairs(connections) do
+        local fn = connection.Function
+        if fn and not swordFxHooked[fn] then
+            swordFxHooked[fn] = true
+            connection:Disable()
+            local wrapper = function(...)
+                local args = {...}
+                local selectedSword = Cosmetics.SwordChanger.EquippedSword
+                if selectedSword then
+                    local isLocal = false
+                    for _, arg in ipairs(args) do
+                        if tostring(arg) == LocalPlayer.Name or arg == LocalPlayer or arg == LocalPlayer.Character then
+                            isLocal = true
+                            break
+                        end
+                    end
+                    if isLocal then
+                        local slashName = getSwordSlashName(selectedSword)
+                        for index, arg in ipairs(args) do
+                            if type(arg) == "string" then
+                                if arg:find("Slash") or arg == "Default" or arg:find("Effect") then
+                                    args[index] = slashName
+                                elseif getSwordsModule() and getSwordsModule():GetSword(arg) then
+                                    args[index] = selectedSword
+                                end
+                            end
+                        end
+                    end
+                end
+                pcall(fn, unpack(args))
+            end
+            swordFxHooked[wrapper] = true
+            remote.OnClientEvent:Connect(wrapper)
+        end
+    end
+end
+
+local function installSwordHooks()
+    for _, remoteName in ipairs({
+        "ParrySuccessAll",
+        "ParryAttempt",
+        "ParrySuccess",
+        "PlaySound",
+        "PlayVisuals"
+    }) do
+        pcall(hookSwordFxRemote, remoteName)
+    end
+end
+
+function Cosmetics.SwordChanger.Equip(swordName)
+    if type(swordName) ~= "string" or swordName == "" then return false end
+    local sm = getSwordsModule()
+    if not sm or not sm:GetSword(swordName) then return false end
+
+    local char = LocalPlayer.Character
+    if not char then return false end
+
+    if Cosmetics.SwordChanger.EquippedSword and Cosmetics.SwordChanger.EquippedSword ~= swordName then
+        visualRemoveOldSwordCompletely(Cosmetics.SwordChanger.EquippedSword)
+    end
+
+    pcall(function()
+        local equipFn = rawget(sm, "EquipSwordTo")
+        if type(equipFn) == "function" and getupvalues and setupvalue then
+            local ups = getupvalues(equipFn)
+            for idx, val in ipairs(ups) do
+                if type(val) == "boolean" then
+                    setupvalue(equipFn, idx, false)
+                    break
+                end
+            end
+        end
+        sm:EquipSwordTo(char, swordName)
+    end)
+
+    local remotes = getRemotesFolder()
+    local fireSwordInfo = remotes and remotes:FindFirstChild("FireSwordInfo")
+    if fireSwordInfo then
+        pcall(function() fireSwordInfo:FireServer(swordName) end)
+    end
+
+    Cosmetics.SwordChanger.EquippedSword = swordName
+    getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD = true
+    getgenv().__VISUAL_UNLOCK_ALL_SWORD = swordName
+    getgenv().__VISUAL_UNLOCK_ALL_SLASH = getSwordSlashName(swordName)
+
+    pcall(function()
+        LocalPlayer:SetAttribute("CurrentlyEquippedSword", swordName)
+        char:SetAttribute("CurrentlyEquippedSword", swordName)
+    end)
+
+    installSwordHooks()
+    return true
+end
+
+Cosmetics.ExplosionChanger = {
+    Enabled = false,
+    SelectedExplosion = "Default",
+    Connections = {}
+}
+
+local function findExplosionTemplate(name)
+    local misc = ReplicatedStorage:FindFirstChild("Misc")
+    local candidates = {}
+    if misc then
+        local de = misc:FindFirstChild("DataExplosions")
+        if de then table.insert(candidates, de) end
+        local ee = misc:FindFirstChild("ExplosionEffects")
+        if ee then table.insert(candidates, ee) end
+    end
+    local shared = ReplicatedStorage:FindFirstChild("Shared")
+    local repInst = shared and shared:FindFirstChild("ReplicatedInstances")
+    if repInst then table.insert(candidates, repInst) end
+
+    local wanted = normalizeName(name)
+    for _, root in ipairs(candidates) do
+        local exact = root:FindFirstChild(name, true)
+        if exact then return exact end
+        for _, child in ipairs(root:GetDescendants()) do
+            if normalizeName(child.Name) == wanted then
+                return child
+            end
+        end
+    end
+    return nil
+end
+
+local function activateExplosionVisual(root)
+    if not root then return end
+    for _, desc in ipairs(root:GetDescendants()) do
+        if desc:IsA("ParticleEmitter") then
+            desc.Enabled = true
+            task.delay(0.2, function()
+                pcall(function() desc.Enabled = false end)
+            end)
+        elseif desc:IsA("Sound") then
+            pcall(function() desc:Play() end)
+        elseif desc:IsA("PointLight") or desc:IsA("SpotLight") then
+            desc.Enabled = true
+            task.delay(0.3, function()
+                pcall(function() desc.Enabled = false end)
+            end)
+        end
+    end
+    task.delay(4, function()
+        pcall(function() root:Destroy() end)
+    end)
+end
+
+function Cosmetics.ExplosionChanger.PlayLocalExplosion(position)
+    if not position then
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        position = root and root.Position or Vector3.zero
+    end
+
+    local tmpl = findExplosionTemplate(Cosmetics.ExplosionChanger.SelectedExplosion)
+    if tmpl then
+        local clone = tmpl:Clone()
+        local parent = workspace:FindFirstChild("Runtime") or workspace
+        clone.Parent = parent
+        if clone:IsA("BasePart") then
+            clone.Position = position
+            clone.Anchored = true
+            clone.CanCollide = false
+        elseif clone:IsA("Model") then
+            clone:PivotTo(CFrame.new(position))
+        end
+        activateExplosionVisual(clone)
+    end
+end
+
+function Cosmetics.ExplosionChanger.Set(name)
+    Cosmetics.ExplosionChanger.SelectedExplosion = name
+    getgenv().explosionFX = name
+
+    pcall(function()
+        LocalPlayer:SetAttribute("CurrentlyEquippedExplosion", name)
+        LocalPlayer:SetAttribute("CurrentlyEquippedExplosionFX", name)
+        LocalPlayer:SetAttribute("EquippedExplosion", name)
+        LocalPlayer:SetAttribute("KillEffect", name)
+    end)
+
+    local char = LocalPlayer.Character
+    if char then
+        pcall(function()
+            char:SetAttribute("CurrentlyEquippedExplosion", name)
+            char:SetAttribute("CurrentlyEquippedExplosionFX", name)
+            char:SetAttribute("EquippedExplosion", name)
+            char:SetAttribute("KillEffect", name)
+        end)
+    end
+end
+
+function Cosmetics.ExplosionChanger.Test(position)
+    Cosmetics.ExplosionChanger.PlayLocalExplosion(position)
+end
+
+function Cosmetics.ExplosionChanger.Toggle(state)
+    Cosmetics.ExplosionChanger.Enabled = state == true
+    if Cosmetics.ExplosionChanger.Enabled then
+        Cosmetics.ExplosionChanger.Set(Cosmetics.ExplosionChanger.SelectedExplosion)
+    end
+end
+
+function Cosmetics.GetSwords()
+    local swords = {}
+    local sm = getSwordsModule()
+    if sm then
+        local ok, collection = pcall(function() return sm:GetCollection() end)
+        if ok and type(collection) == "table" then
+            for key, sword in pairs(collection) do
+                local name = type(sword) == "table" and sword.Name or (type(key) == "string" and key)
+                if name and not table.find(swords, name) then
+                    table.insert(swords, name)
+                end
+            end
+        end
+    end
+    table.sort(swords)
+    return swords
+end
+
+function Cosmetics.GetExplosions()
+    local explosions = {}
+    local misc = ReplicatedStorage:FindFirstChild("Misc")
+    local de = misc and misc:FindFirstChild("DataExplosions")
+    if de then
+        for _, child in ipairs(de:GetChildren()) do
+            if not table.find(explosions, child.Name) then
+                table.insert(explosions, child.Name)
+            end
+        end
+    end
+    table.sort(explosions)
+    return explosions
+end
+
+getgenv().Cosmetics = Cosmetics
+return Cosmetics
