@@ -1,9 +1,32 @@
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
+--- fixed
+
+
+local _cloneref = cloneref or function(x) return x end
+local Players = _cloneref(game:GetService("Players"))
+local ReplicatedStorage = _cloneref(game:GetService("ReplicatedStorage"))
+local RunService = _cloneref(game:GetService("RunService"))
+local TweenService = _cloneref(game:GetService("TweenService"))
+local UserInputService = _cloneref(game:GetService("UserInputService"))
+local HttpService = _cloneref(game:GetService("HttpService"))
+
+local _clamp = math.clamp
+local _floor = math.floor
+local _max = math.max
+local _min = math.min
+local _clear = table.clear
+local _find = table.find
+local _insert = table.insert
+local _remove = table.remove
+local _defer = task.defer
+local _delay = task.delay
+local _wait = task.wait
+local _spawn = task.spawn
+local _pairs = pairs
+local _ipairs = ipairs
+local _pcall = pcall
+local _tostring = tostring
+local _tonumber = tonumber
+local _type = type
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -777,6 +800,87 @@ end
 
 local refreshInventoryPage
 
+local function matchesSwordName(item, swordName)
+    if type(item) ~= "table" or type(swordName) ~= "string" then
+        return false
+    end
+    if item.Name == swordName or item.ItemName == swordName or item.SwordName == swordName then
+        return true
+    end
+    if type(item.Config) == "table" and item.Config.Name == swordName then
+        return true
+    end
+    if type(item.Sword) == "table" and item.Sword.Name == swordName then
+        return true
+    end
+    if type(item.Data) == "table" and item.Data.Name == swordName then
+        return true
+    end
+    if type(item.Item) == "table" and item.Item.Name == swordName then
+        return true
+    end
+    return false
+end
+
+local function getExistingSwordItem(swordName)
+    if not ShopController or not ShopController._virtualItems or not ShopController._virtualItems.Sword then
+        return nil
+    end
+    local swordTable = ShopController._virtualItems.Sword
+    if swordTable[swordName] and matchesSwordName(swordTable[swordName], swordName) then
+        return swordTable[swordName]
+    end
+    for _, item in pairs(swordTable) do
+        if matchesSwordName(item, swordName) then
+            return item
+        end
+    end
+    if swordTable[swordName] and type(swordTable[swordName]) == "table" then
+        return swordTable[swordName]
+    end
+    return nil
+end
+
+local function deduplicateSwordSlots()
+    if not ShopController or not ShopController._virtualItems or not ShopController._virtualItems.Sword then
+        return
+    end
+    local swordTable = ShopController._virtualItems.Sword
+    local page = ShopController._inventoryPages and ShopController._inventoryPages.Sword
+    local seen = {}
+    local duplicates = {}
+
+    for key, item in pairs(swordTable) do
+        if type(item) == "table" then
+            local name = item.Name or (item.Config and item.Config.Name) or (item.Sword and item.Sword.Name) or (item.Data and item.Data.Name) or (type(key) == "string" and key)
+            if name then
+                if not seen[name] then
+                    seen[name] = { key = key, item = item }
+                else
+                    local existing = seen[name]
+                    local existingIsReal = (existing.item.InventoryKey ~= nil) or (existing.item.UserItemId ~= nil) or (existing.item.Serial ~= nil) or (existing.key ~= name)
+                    local currentIsReal = (item.InventoryKey ~= nil) or (item.UserItemId ~= nil) or (item.Serial ~= nil) or (key ~= name)
+                    if currentIsReal and not existingIsReal then
+                        duplicates[existing.key] = existing.item
+                        seen[name] = { key = key, item = item }
+                    else
+                        duplicates[key] = item
+                    end
+                end
+            end
+        end
+    end
+
+    for dupKey, dupItem in pairs(duplicates) do
+        swordTable[dupKey] = nil
+        if page and type(page.MarkDirty) == "function" then
+            pcall(function()
+                page.MarkDirty(dupItem, false, true)
+            end)
+        end
+    end
+end
+
 local function isSwordFavorited(swordName)
     return type(swordName) == "string" and swordName ~= "" and favoriteSwords[swordName] == true
 end
@@ -786,7 +890,7 @@ local function applyFavoriteToNativeSwordItem(swordName, isFavorite)
         return
     end
 
-    local item = ShopController._virtualItems.Sword[swordName]
+    local item = getExistingSwordItem(swordName)
     if not item then
         return
     end
@@ -1140,6 +1244,8 @@ local function unlockSwords()
     ShopController._virtualItems = ShopController._virtualItems or {}
     ShopController._virtualItems.Sword = ShopController._virtualItems.Sword or {}
 
+    deduplicateSwordSlots()
+
     local collection = Swords:GetCollection()
     local processedSwords = 0
 
@@ -1152,12 +1258,12 @@ local function unlockSwords()
         if type(sword) == "table" then
             local swordName = sword.Name or (type(key) == "string" and key) or nil
             if swordName then
-                local item = ShopController._virtualItems.Sword[swordName]
+                local item = getExistingSwordItem(swordName)
                 if not item and type(ShopController._createSwordSlot) == "function" then
                     pcall(function()
                         ShopController:_createSwordSlot(sword)
                     end)
-                    item = ShopController._virtualItems.Sword[swordName]
+                    item = getExistingSwordItem(swordName)
                 end
 
                 if item and forceOwned(item) then
@@ -1171,6 +1277,7 @@ local function unlockSwords()
         end
     end
 
+    deduplicateSwordSlots()
     refreshInventoryPage("Sword")
 end
 
