@@ -585,20 +585,26 @@ local VisualNativeUnlockAll = {
 
 
         local function getSwordDataByName(swordName)
-            if not Swords or type(swordName) ~= "string" then
+            if type(swordName) ~= "string" or swordName == "" then
                 return nil
             end
 
-            local ok, swordData =
-                pcall(function()
-                    return Swords:GetSword(swordName)
-                end)
+            if Swords then
+                local ok, swordData =
+                    pcall(function()
+                        return Swords:GetSword(swordName)
+                    end)
 
-            if ok then
-                return swordData
+                if ok and swordData then
+                    return swordData
+                end
             end
 
-            return nil
+            if visualUnlockCatalog and visualUnlockCatalog.SwordData and visualUnlockCatalog.SwordData[swordName] then
+                return visualUnlockCatalog.SwordData[swordName]
+            end
+
+            return { Name = swordName, SlashName = swordName }
         end
 
         local function getSwordSlashName(swordName)
@@ -985,6 +991,10 @@ local function visualRemoveCompetingSwords(character, desiredSword)
                     and getupvalues
                     and setupvalue then
 
+                    pcall(function()
+                        setupvalue(equipFunction, 3, false)
+                    end)
+
                     local upvalues = getupvalues(equipFunction)
 
                     for index, value in ipairs(upvalues) do
@@ -1059,8 +1069,9 @@ local function visualRemoveCompetingSwords(character, desiredSword)
 
             if getgenv().updateSword then
                 pcall(getgenv().updateSword)
+            elseif setSword then
+                pcall(setSword)
             end
-
 
             return true
         end
@@ -1299,10 +1310,9 @@ local function visualRemoveCompetingSwords(character, desiredSword)
 
             VisualNativeUnlockAll.LocalEquipButtonConnection =
                 button.Activated:Connect(function()
-                    local currentSword =
-                        namer.Text
+                    local currentSword = namer.Text:gsub("^%s+", ""):gsub("%s+$", "")
 
-                    if not getSwordDataByName(currentSword) then
+                    if currentSword == "" or not getSwordDataByName(currentSword) then
                         return
                     end
 
@@ -1510,39 +1520,7 @@ local function visualRemoveCompetingSwords(character, desiredSword)
             return nil
         end
 
-        local function hookInventoryPageScroll(pageType)
-            if not ShopController or not ShopController._inventoryPages then return end
-            local page = ShopController._inventoryPages[pageType]
-            if not page or not page.Scroll or page.Scroll.__visualHooked then return end
-            local origSetItems = page.Scroll.SetItems
-            page.Scroll.__origSetItems = origSetItems
-            page.Scroll.__visualHooked = true
-            page.Scroll.SetItems = function(section, items)
-                if VisualNativeUnlockAll.Enabled then
-                    if section == "Unowned" then
-                        return origSetItems("Unowned", {})
-                    elseif section == "Owned" then
-                        local allOwned = {}
-                        local seen = {}
-                        local vItems = ShopController._virtualItems and ShopController._virtualItems[pageType]
-                        if vItems then
-                            for _, itm in pairs(vItems) do
-                                if type(itm) == "table" and itm.Name and not itm.ForceHide and not seen[itm.Name] then
-                                    seen[itm.Name] = true
-                                    forceOwned(itm)
-                                    table.insert(allOwned, itm)
-                                end
-                            end
-                        end
-                        return origSetItems("Owned", allOwned)
-                    end
-                end
-                return origSetItems(section, items)
-            end
-        end
-
         refreshInventoryPage = function(inventoryType)
-            hookInventoryPageScroll(inventoryType)
             if not ShopController then
                 return
             end
@@ -1644,7 +1622,8 @@ local function visualRemoveCompetingSwords(character, desiredSword)
                         or nil
 
                     if swordName then
-                        local item = findExistingVirtualItem("Sword", swordName)
+                        local item =
+                            ShopController._virtualItems.Sword[swordName]
 
 
                         if not item
@@ -1654,7 +1633,8 @@ local function visualRemoveCompetingSwords(character, desiredSword)
                                 ShopController:_createSwordSlot(sword)
                             end)
 
-                            item = findExistingVirtualItem("Sword", swordName)
+                            item =
+                                ShopController._virtualItems.Sword[swordName]
                         end
 
                         if item and forceOwned(item) then
@@ -2259,6 +2239,8 @@ local function visualRemoveCompetingSwords(character, desiredSword)
         function VisualNativeUnlockAll.Disable()
             VisualNativeUnlockAll.Enabled = false
             getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD = false
+            getgenv().skinChanger = false
+            getgenv().swordModel = ""
 
             for _, connection in ipairs(VisualNativeUnlockAll.Connections) do
                 pcall(function()
@@ -2286,6 +2268,151 @@ function VisualNativeUnlockAll.Toggle(state)
         VisualNativeUnlockAll.Disable()
     end
 end
+
+    local setSword
+    task.spawn(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local swordInstancesInstance = rs:WaitForChild("Shared", 9e9):WaitForChild("ReplicatedInstances", 9e9):WaitForChild("Swords", 9e9)
+        local swordInstances = require(swordInstancesInstance)
+
+        local swordsController
+        task.spawn(function()
+            while task.wait(0.25) and not swordsController do
+                local ok, conns = pcall(getconnections, rs.Remotes.FireSwordInfo.OnClientEvent)
+                if ok and conns then
+                    for _, v in ipairs(conns) do
+                        if v.Function and islclosure and islclosure(v.Function) then
+                            local ok2, up = pcall(getupvalues, v.Function)
+                            if ok2 and #up == 1 and type(up[1]) == "table" then
+                                swordsController = up[1]
+                                VisualNativeUnlockAll.SwordController = up[1]
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        local function getSlashName(swordName)
+            local ok, sln = pcall(function() return swordInstances:GetSword(swordName) end)
+            return (ok and sln and sln.SlashName) or "SlashEffect"
+        end
+
+        local function refreshSlashName()
+            local fxName = getgenv().swordFX ~= "" and getgenv().swordFX or getgenv().swordModel
+            if fxName ~= "" then
+                getgenv().slashName = getSlashName(fxName)
+            else
+                getgenv().slashName = "SlashEffect"
+            end
+        end
+        refreshSlashName()
+
+        setSword = function()
+            if not getgenv().skinChanger then return end
+            if not LocalPlayer.Character then return end
+            local modelName = getgenv().swordModel
+            if not modelName or modelName == "" then return end
+
+            pcall(function()
+                local f = rawget(swordInstances, "EquipSwordTo")
+                if type(f) == "function" and getupvalues and setupvalue then
+                    pcall(function()
+                        setupvalue(f, 3, false)
+                    end)
+                    local ups = getupvalues(f)
+                    for i = 1, #ups do
+                        if type(ups[i]) == "boolean" then
+                            setupvalue(f, i, false)
+                            break
+                        end
+                    end
+                end
+            end)
+            pcall(function()
+                swordInstances:EquipSwordTo(LocalPlayer.Character, modelName)
+            end)
+            task.spawn(function()
+                local attempts = 0
+                while not swordsController and attempts < 20 do
+                    task.wait(0.25)
+                    attempts = attempts + 1
+                end
+                if not swordsController then return end
+                pcall(function()
+                    if swordsController.SetSword then
+                        swordsController:SetSword(getgenv().swordAnimations ~= "" and getgenv().swordAnimations or modelName)
+                    end
+                end)
+                pcall(function()
+                    local targetSword = getgenv().swordFX ~= "" and getgenv().swordFX or modelName
+                    if rs.Remotes:FindFirstChild("FireSwordInfo") then
+                        rs.Remotes.FireSwordInfo:FireServer(targetSword)
+                    end
+                    if swordsController.currentSword ~= nil then
+                        swordsController.currentSword = targetSword
+                    end
+                    if swordsController.SwordFX ~= nil then
+                        swordsController.SwordFX = targetSword
+                    end
+                end)
+            end)
+            pcall(function()
+                LocalPlayer:SetAttribute("CurrentlyEquippedSword", modelName)
+            end)
+            pcall(function()
+                if LocalPlayer.Character then
+                    LocalPlayer.Character:SetAttribute("CurrentlyEquippedSword", modelName)
+                end
+            end)
+        end
+
+        getgenv().updateSword = function()
+            refreshSlashName()
+            setSword()
+        end
+
+        task.spawn(function()
+            while task.wait(1) do
+                if getgenv().skinChanger
+                    and getgenv().swordModel ~= "" then
+                    local char = LocalPlayer.Character
+                    if char then
+                        if LocalPlayer:GetAttribute("CurrentlyEquippedSword") ~= getgenv().swordModel then
+                            setSword()
+                        end
+                        if not char:FindFirstChild(getgenv().swordModel) then
+                            setSword()
+                        end
+                        for _, v in pairs(char:GetChildren()) do
+                            if v:IsA("Model") and v.Name ~= getgenv().swordModel then
+                                local isSword = false
+                                pcall(function()
+                                    if swordInstances:GetSword(v.Name) then
+                                        isSword = true
+                                    end
+                                end)
+                                if isSword then
+                                    v:Destroy()
+                                end
+                            end
+                            task.wait()
+                        end
+                    end
+                end
+            end
+        end)
+
+        LocalPlayer.CharacterAdded:Connect(function()
+            if getgenv().skinChanger and getgenv().swordModel ~= "" then
+                task.wait(1.5)
+                pcall(function()
+                    getgenv().updateSword()
+                end)
+            end
+        end)
+    end)
 
     task.spawn(function()
         local rs = game:GetService("ReplicatedStorage")
@@ -3670,9 +3797,40 @@ local Cosmetics = {
     UnlockAll = VisualNativeUnlockAll,
     AvatarChanger = AvatarChanger,
     SwordChanger = {
-        Equip = equipSwordLocally,
+        Equip = function(swordName)
+            if not swordName or swordName == "" then return false end
+            getgenv().skinChanger = true
+            getgenv().swordModel = swordName
+            getgenv().swordAnimations = swordName
+            getgenv().swordFX = swordName
+
+            pcall(function()
+                equipSwordLocally(swordName)
+            end)
+
+            pcall(function()
+                if getgenv().updateSword then
+                    getgenv().updateSword()
+                elseif setSword then
+                    setSword()
+                end
+            end)
+            return true
+        end,
         GetSwords = function()
-            return visualUnlockCatalog.SwordByRarity.All
+            if visualUnlockCatalog and visualUnlockCatalog.SwordByRarity and #visualUnlockCatalog.SwordByRarity.All > 0 then
+                return visualUnlockCatalog.SwordByRarity.All
+            end
+            if Swords and type(Swords.GetCollection) == "function" then
+                local list = {}
+                for k, v in pairs(Swords:GetCollection()) do
+                    local n = (type(v) == "table" and v.Name) or (type(k) == "string" and k)
+                    if n then table.insert(list, n) end
+                end
+                table.sort(list)
+                return list
+            end
+            return {'Default', 'Darkblade', 'Katana', 'Scythe'}
         end,
     },
     ExplosionChanger = {
