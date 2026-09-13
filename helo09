@@ -991,16 +991,14 @@ local function visualRemoveCompetingSwords(character, desiredSword)
                     and getupvalues
                     and setupvalue then
 
-                    pcall(function()
-                        setupvalue(equipFunction, 3, false)
-                    end)
+                    pcall(setupvalue, equipFunction, 2, false)
+                    pcall(setupvalue, equipFunction, 3, false)
 
                     local upvalues = getupvalues(equipFunction)
 
                     for index, value in ipairs(upvalues) do
                         if type(value) == "boolean" then
-                            setupvalue(equipFunction, index, false)
-                            break
+                            pcall(setupvalue, equipFunction, index, false)
                         end
                     end
                 end
@@ -1053,8 +1051,6 @@ local function visualRemoveCompetingSwords(character, desiredSword)
             getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD = true
             getgenv().__VISUAL_UNLOCK_ALL_SWORD = swordName
             getgenv().swordModel = swordName
-            getgenv().skinChanger = true
-
 
             pcall(function()
                 LocalPlayer:SetAttribute("CurrentlyEquippedSword", swordName)
@@ -1066,12 +1062,6 @@ local function visualRemoveCompetingSwords(character, desiredSword)
             getgenv().__VISUAL_UNLOCK_ALL_SLASH =
                 getSwordSlashName(swordName)
             getgenv().slashName = getgenv().__VISUAL_UNLOCK_ALL_SLASH
-
-            if getgenv().updateSword then
-                pcall(getgenv().updateSword)
-            elseif setSword then
-                pcall(setSword)
-            end
 
             return true
         end
@@ -2310,28 +2300,30 @@ end
         refreshSlashName()
 
         setSword = function()
-            if not getgenv().skinChanger then return end
+            if not (getgenv().skinChanger or getgenv().skinChangerEnabled) then return end
             if not LocalPlayer.Character then return end
             local modelName = getgenv().swordModel
             if not modelName or modelName == "" then return end
 
             pcall(function()
-                local f = rawget(swordInstances, "EquipSwordTo")
+                local f = rawget(swordInstances, "EquipSwordTo") or swordInstances.EquipSwordTo or (Swords and (rawget(Swords, "EquipSwordTo") or Swords.EquipSwordTo))
                 if type(f) == "function" and getupvalues and setupvalue then
-                    pcall(function()
-                        setupvalue(f, 3, false)
-                    end)
+                    pcall(setupvalue, f, 2, false)
+                    pcall(setupvalue, f, 3, false)
                     local ups = getupvalues(f)
                     for i = 1, #ups do
                         if type(ups[i]) == "boolean" then
-                            setupvalue(f, i, false)
-                            break
+                            pcall(setupvalue, f, i, false)
                         end
                     end
                 end
             end)
             pcall(function()
-                swordInstances:EquipSwordTo(LocalPlayer.Character, modelName)
+                if swordInstances and swordInstances.EquipSwordTo then
+                    swordInstances:EquipSwordTo(LocalPlayer.Character, modelName)
+                elseif Swords and Swords.EquipSwordTo then
+                    Swords:EquipSwordTo(LocalPlayer.Character, modelName)
+                end
             end)
             task.spawn(function()
                 local attempts = 0
@@ -2375,8 +2367,9 @@ end
 
         task.spawn(function()
             while task.wait(1) do
-                if getgenv().skinChanger
-                    and getgenv().swordModel ~= "" then
+                if (getgenv().skinChanger or getgenv().skinChangerEnabled)
+                    and getgenv().swordModel ~= ""
+                    and not getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD then
                     local char = LocalPlayer.Character
                     if char then
                         if LocalPlayer:GetAttribute("CurrentlyEquippedSword") ~= getgenv().swordModel then
@@ -2389,7 +2382,7 @@ end
                             if v:IsA("Model") and v.Name ~= getgenv().swordModel then
                                 local isSword = false
                                 pcall(function()
-                                    if swordInstances:GetSword(v.Name) then
+                                    if (swordInstances and swordInstances:GetSword(v.Name)) or (Swords and Swords:GetSword(v.Name)) then
                                         isSword = true
                                     end
                                 end)
@@ -2405,8 +2398,12 @@ end
         end)
 
         LocalPlayer.CharacterAdded:Connect(function()
-            if getgenv().skinChanger and getgenv().swordModel ~= "" then
-                task.wait(1.5)
+            if (getgenv().skinChanger or getgenv().skinChangerEnabled)
+                and not getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD then
+                getgenv().skinChanger = false
+                task.wait(2)
+                getgenv().skinChanger = true
+                task.wait(0.5)
                 pcall(function()
                     getgenv().updateSword()
                 end)
@@ -3797,24 +3794,34 @@ local Cosmetics = {
     UnlockAll = VisualNativeUnlockAll,
     AvatarChanger = AvatarChanger,
     SwordChanger = {
+        Toggle = function(state)
+            local isEnabled = (state == true)
+            getgenv().skinChanger = isEnabled
+            getgenv().skinChangerEnabled = isEnabled
+            getgenv().changeSwordModel = isEnabled
+            getgenv().changeSwordAnimation = isEnabled
+            getgenv().changeSwordFX = isEnabled
+            if isEnabled then
+                getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD = false
+                if getgenv().swordModel and getgenv().swordModel ~= "" then
+                    if getgenv().updateSword then
+                        getgenv().updateSword()
+                    end
+                end
+            end
+        end,
         Equip = function(swordName)
             if not swordName or swordName == "" then return false end
-            getgenv().skinChanger = true
             getgenv().swordModel = swordName
             getgenv().swordAnimations = swordName
             getgenv().swordFX = swordName
+            getgenv().__VISUAL_UNLOCK_ALL_OWNS_SWORD = false
 
-            pcall(function()
-                equipSwordLocally(swordName)
-            end)
-
-            pcall(function()
+            if getgenv().skinChanger or getgenv().skinChangerEnabled then
                 if getgenv().updateSword then
                     getgenv().updateSword()
-                elseif setSword then
-                    setSword()
                 end
-            end)
+            end
             return true
         end,
         GetSwords = function()
